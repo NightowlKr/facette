@@ -1,0 +1,9 @@
+# Logrotate settings for Facette
+/var/log/facette/facette.log {
+  daily
+  rotate 14
+  compress
+  missingok
+  notifempty
+  copytruncate
+}

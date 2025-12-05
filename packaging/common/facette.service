@@ -1,0 +1,24 @@
+# Facette systemd service
+# This unit file is installed by the package under:
+#   /lib/systemd/system/facette.service
+# Drop-in overrides can be placed under:
+#   /etc/systemd/system/facette.service.d/*.conf
+#
+# You can inspect the merged unit (base + overrides) with:
+#   systemctl cat facette.service
+
+[Unit]
+Description=Facette Metrics & Graph Engine
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=facette
+Group=facette
+ExecStart=/usr/local/bin/facette serve --config /etc/facette/facette.yaml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

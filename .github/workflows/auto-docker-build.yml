@@ -1,0 +1,47 @@
+name: Facette Docker Multi-Arch Build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Enable QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version from tag
+        id: vars
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          TAG=${TAG#v}
+          echo "FACETTE_VERSION=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./docker
+          file: ./docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            FACETTE_VERSION=${{ steps.vars.outputs.FACETTE_VERSION }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/facette:latest
+            ghcr.io/${{ github.repository_owner }}/facette:${{ steps.vars.outputs.FACETTE_VERSION }}

@@ -1,0 +1,221 @@
+name: Facette Full Auto Packaging
+
+on:
+  schedule:
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+
+env:
+  UPSTREAM_REPO: facette/facette
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      should_build: ${{ steps.check.outputs.should_build }}
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Determine latest upstream version
+        id: check
+        run: |
+          LATEST_TAG=$(curl -s https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest | jq -r .tag_name)
+          LATEST_TAG=${LATEST_TAG#v}
+          echo "Latest upstream: $LATEST_TAG"
+
+          if [ -f LAST_BUILD_VERSION ]; then
+            CUR=$(cat LAST_BUILD_VERSION)
+          else
+            CUR=""
+          fi
+
+          if [ "$LATEST_TAG" = "$CUR" ] || [ -z "$LATEST_TAG" ]; then
+            echo "No new version to build"
+            echo "should_build=false" >> $GITHUB_OUTPUT
+          else
+            echo "New version detected: $LATEST_TAG"
+            echo "should_build=true" >> $GITHUB_OUTPUT
+            echo "version=$LATEST_TAG" >> $GITHUB_OUTPUT
+          fi
+
+  build-packages:
+    needs: check-upstream
+    if: needs.check-upstream.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkgtype: deb
+            distro: ubuntu2004
+            arch: amd64
+          - pkgtype: deb
+            distro: ubuntu2004
+            arch: arm64
+          - pkgtype: deb
+            distro: ubuntu2204
+            arch: amd64
+          - pkgtype: deb
+            distro: ubuntu2204
+            arch: arm64
+          - pkgtype: deb
+            distro: ubuntu2404
+            arch: amd64
+          - pkgtype: deb
+            distro: ubuntu2404
+            arch: arm64
+          - pkgtype: rpm
+            distro: rocky8
+            arch: amd64
+          - pkgtype: rpm
+            distro: rocky8
+            arch: arm64
+          - pkgtype: rpm
+            distro: rocky9
+            arch: amd64
+          - pkgtype: rpm
+            distro: rocky9
+            arch: arm64
+          - pkgtype: rpm
+            distro: oracle8
+            arch: amd64
+          - pkgtype: rpm
+            distro: oracle8
+            arch: arm64
+          - pkgtype: rpm
+            distro: oracle9
+            arch: amd64
+          - pkgtype: rpm
+            distro: oracle9
+            arch: arm64
+          - pkgtype: rpm
+            distro: alma8
+            arch: amd64
+          - pkgtype: rpm
+            distro: alma8
+            arch: arm64
+          - pkgtype: rpm
+            distro: alma9
+            arch: amd64
+          - pkgtype: rpm
+            distro: alma9
+            arch: arm64
+          - pkgtype: rpm
+            distro: centos7
+            arch: amd64
+
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential golang-go ruby ruby-dev rpm jq
+          sudo gem install --no-document fpm
+
+      - name: Download upstream source
+        env:
+          VERSION: ${{ needs.check-upstream.outputs.version }}
+        run: |
+          curl -sL "https://github.com/${UPSTREAM_REPO}/archive/refs/tags/v${VERSION}.tar.gz" -o src.tar.gz
+          tar xf src.tar.gz
+          mv facette-* source
+
+      - name: Build Facette binary
+        env:
+          VERSION: ${{ needs.check-upstream.outputs.version }}
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          cd source
+          GOOS=linux GOARCH=${GOARCH} CGO_ENABLED=0 go build -o ../facette ./cmd/facette
+
+      - name: Prepare package root
+        run: |
+          rm -rf pkgroot
+          mkdir -p pkgroot/usr/local/bin
+          mkdir -p pkgroot/etc/facette
+          mkdir -p pkgroot/var/log/facette
+          mkdir -p pkgroot/var/lib/facette
+          mkdir -p pkgroot/var/cache/facette
+          mkdir -p pkgroot/lib/systemd/system
+          mkdir -p pkgroot/usr/share/facette
+
+          cp facette pkgroot/usr/local/bin/facette
+          cp packaging/common/facette.yaml pkgroot/usr/share/facette/facette.yaml
+          cp packaging/common/facette.yaml pkgroot/etc/facette/facette.yaml
+          cp packaging/common/facette.service pkgroot/lib/systemd/system/facette.service
+          cp packaging/common/logrotate/facette pkgroot/usr/share/facette/logrotate
+          cp packaging/common/systemd-override/override.conf pkgroot/usr/share/facette/override.conf
+
+      - name: Build package with fpm
+        env:
+          VERSION: ${{ needs.check-upstream.outputs.version }}
+        run: |
+          ARCH=${{ matrix.arch }}
+          PKGTYPE=${{ matrix.pkgtype }}
+          DISTRO=${{ matrix.distro }}
+
+          if [ "$PKGTYPE" = "deb" ]; then
+            OUT_EXT="deb"
+            FPM_TYPE="deb"
+            POSTINST="packaging/deb/postinst"
+          else
+            OUT_EXT="rpm"
+            FPM_TYPE="rpm"
+            POSTINST="packaging/rpm/postinstall.sh"
+          fi
+
+          fpm -s dir -t $FPM_TYPE             -n facette             -v "$VERSION"             --architecture "$ARCH"             --description "Facette graph and metrics engine"             --url "https://github.com/facette/facette"             --license "BSD-3-Clause"             --after-install "$POSTINST"             -C pkgroot             usr/local/bin/facette             etc/facette             var/log/facette             var/lib/facette             var/cache/facette             lib/systemd/system/facette.service             usr/share/facette
+
+          PKG_NAME="facette-${VERSION}-${DISTRO}-${ARCH}.${OUT_EXT}"
+          mv facette_*.$OUT_EXT "$PKG_NAME" || mv facette*.${OUT_EXT} "$PKG_NAME"
+          sha256sum "$PKG_NAME" > "${PKG_NAME}.sha256"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: facette-${{ matrix.distro }}-${{ matrix.arch }}
+          path: |
+            facette-*-${{ matrix.distro }}-${{ matrix.arch }}*.deb
+            facette-*-${{ matrix.distro }}-${{ matrix.arch }}*.rpm
+            facette-*-${{ matrix.distro }}-${{ matrix.arch }}*.sha256
+          if-no-files-found: ignore
+
+  release:
+    needs: build-packages
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.check-upstream.outputs.version }}
+          name: Facette v${{ needs.check-upstream.outputs.version }} (Auto Packages)
+          body: |
+            ## Automated Packaging Release
+            - Built DEB and RPM packages for multiple distributions and architectures.
+            - Includes sha256 checksum files.
+          files: |
+            dist/**/facette-*.deb
+            dist/**/facette-*.rpm
+            dist/**/facette-*.sha256
+
+      - name: Update LAST_BUILD_VERSION
+        run: |
+          echo "${{ needs.check-upstream.outputs.version }}" > LAST_BUILD_VERSION
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add LAST_BUILD_VERSION
+          git commit -m "Update LAST_BUILD_VERSION" || echo "No changes to commit"
+          git push || echo "Nothing to push"

@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  facette:
+    image: ghcr.io/YOUR_GH_ORG_OR_USER/facette:latest
+    container_name: facette
+    restart: unless-stopped
+    ports:
+      - "12003:12003"
+    volumes:
+      - ./facette.yaml:/etc/facette/facette.yaml:ro
+      - ./data:/var/lib/facette
+      - ./logs:/var/log/facette
+      - ./cache:/var/cache/facette
